@@ -1,0 +1,148 @@
+%% FitzHugh-Nagumo model GUI
+% Master in Information Health Engineering
+% Course 2019/2010
+% Course: Biosignals and bioimages
+% Gonzalo R. Ríos-Muñoz
+% Code version 1.0 November 2019
+% Universidad Carlos III de Madrid
+
+function [U_simulation, V_simulation, Fs, M0, M1, M2, Fs2] = EMULATOR_simulation(global_parameters)
+
+%% Read variables from the global_parameters struct
+Nt = global_parameters.Nt;
+TF = global_parameters.TF;
+tF0 = global_parameters.tF0;
+fs2_shift = global_parameters.fs2_shift;
+
+S = global_parameters.S;
+Nx = global_parameters.Nx;
+Ny = global_parameters.Ny;
+Uout = global_parameters.Uout;
+
+speed = global_parameters.speed;
+D = global_parameters.D;
+F = global_parameters.F;
+T = global_parameters.T;
+dyn_noise_std = global_parameters.dyn_noise_std;
+
+alpha = global_parameters.alpha;
+beta = global_parameters.beta;
+
+png_file = global_parameters.png_file;
+
+%% Forzing signal
+% Same signal will be used for the first stimulus and the extra stimulus
+% For the second forcing signal the first one will be shifted in time by
+% a number of fs2_shift samples
+% Forzing signal similar to the 1D case
+
+% Fs, Fs2 etc...
+Fs = zeros([1 Nt]); % Forcing signal
+Fs(fix(tF0/T):fix(TF/T):Nt) = F;
+
+for i=1:floor((Nt-fix(tF0/T))/fix(TF/T))+1
+    cas=(i-1)*fix(TF/T)+fix(tF0/T) + 1;
+    bal=floor(fix(TF/T)/40);
+    for j=cas-bal:cas+bal
+        Fs(j)=F-(abs(j-cas)/bal*F);
+    end
+end
+
+%%
+% MODIFICATIONS for Extra signals
+%%%
+Fs = Fs(1:Nt); % To make sure we have the same number of samples as iterations
+
+% First Excitation signal
+Fs2 = zeros(size(Fs));
+% Take only the first repetition of the initial forzing signal
+cas= fix(tF0/T) + 1;
+bal=floor(fix(TF/T)/40);
+
+% If set to > 0 calculate second forcing signal
+% Tip: circshift()
+if fs2_shift > 0
+    Fs2(1:cas+bal) = Fs(1:cas+bal);
+    Fs2 = circshift(Fs2,f2_shift); % 1 line of code
+end
+
+
+%%
+% Masks
+%%%
+% PNG file containing the MASK info
+% % - Black pixels -> Obstacle
+% % - Red pixels -> Main excitation
+% % - Green pixels -> First extra excitation
+% % - Blue pixels -> Second extra excitation (not used in this case)
+png_file = ['./Masks/' png_file];
+% Function reading Masks
+[M0, M1, M2, M3, M4] = generateObstacleExitationMasksFromPNG(png_file, Nx, Ny);
+
+M0 = M0*1; % Obstacle Mask
+M1 = M1*1; % Main excitation Mask
+M2 = M2*1; % First extra Mask
+%     M3 = M3*1; % Second extra Mask
+
+U_simulation = zeros(Nx,Ny,Nt);
+V_simulation = zeros(Nx,Ny,Nt);
+
+U_simulation(:,:,1) = -2*ones(Nx,Ny,1);
+V_simulation(:,:,1) = -2*ones(Nx,Ny,1);
+
+for t = 2:Nt
+    
+    if t == fs2_shift
+        M1 = zeros(size(M1));
+        M0 = ones(size(M0));
+    end
+    
+    if t==1000
+        Fs(t:end) = 0;
+    end
+    
+    % Take the U and V value at t-1 from the matrices U and V
+    U_ = U_simulation(:,:,t-1); % 1 line of code
+    V_ = V_simulation(:,:,t-1); % 1 line of code
+    
+    % Calculate d2Ux X axis 3 possible cases
+    % Case 1: columns 2:Nx-1 where there is data in columns 1 and Nx
+    % Case 2: column 1 does not have left neighbors, use Uout value instead
+    % Case 3: column Nx does not have left neighbors, use Uout value instead
+    d2Ux( 1:Ny, 2:Nx-1 ) = (U_(1:Ny,1:(Nx-2))-2*U_(1:Ny,2:(Nx-1))+U_(1:Ny,3:Nx))./(S^2); % 1 line of code
+    d2Ux( 1:Ny, 1 ) = ( U_(1:Ny,2)-2*U_(1:Ny,1) + Uout )./(S^2); % 1 line of code
+    d2Ux( 1:Ny, Nx ) = ( Uout - 2*U_(1:Ny,Nx) +U_(1:Ny,Nx-1))./(S^2); % 1 line of code
+    
+    % Calculate d2Uy Y axis 3 possible cases
+    % Case 1: rows 2:Ny-1 where there is data in row 1 and Ny
+    % Case 2: row 1 does not have upper neighbors, use Uout value instead
+    % Case 3: row Nx does not have lower neighbors, use Uout value instead
+    d2Uy( 2:Ny-1, 1:Nx) = ( U_(1:(Ny-2),1:Nx)-2*U_(2:(Ny-1), 1:Nx)+U_(3:Ny,1:Nx))./(S^2); % 1 line of code
+    d2Uy( 1, 1:Nx ) = ( U_(Ny,1:Nx)-2*U_(1, 1:Nx) + Uout )./(S^2); % 1 line of code
+    d2Uy( Ny, 1:Nx ) = ( Uout -2*U_(Ny, 1:Nx)+U_(1,1:Nx)  )./(S^2); % 1 line of code
+    
+    % Aggregate d2Ux and d2Uy
+    d2U = d2Ux+d2Uy; % 1 line of code
+    
+    % Update U
+    % alpha coefficients
+    aux_coeff = alpha(1) + alpha(2)*U_ + alpha(3)*U_.^2 + alpha(4)*U_.^3; % 1 line of code
+    % M1 effect with Fs(t)
+    aux_forcing = M1.*Fs(t); % 1 line of code
+    % M2 effect with Fs2(t)
+    aux_extra =  M2.*Fs2(t); % 1 line of code
+    % d2U effect multiplied by speed*D
+    aux_diffusion = speed*D*M0.*d2U ; % 1 line of code
+    % Noise effect
+    aux_noise = sqrt(T)*dyn_noise_std*randn(Nx,Ny);
+    % Update U
+    U_simulation(:,:,t) = U_ + T*(aux_coeff + aux_forcing + aux_extra + aux_diffusion - V_) + aux_noise;
+
+    % Update V
+    V_simulation(:,:,t) = V_ + T.*(beta(1).*U_ + beta(2).*V_ + beta(3));
+     % 1 line of code
+    
+end
+end
+
+

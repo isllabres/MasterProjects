@@ -1,0 +1,2 @@
+addpath('toolbox/external');
+toolboxCompile;

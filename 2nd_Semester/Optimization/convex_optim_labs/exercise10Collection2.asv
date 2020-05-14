@@ -1,0 +1,14 @@
+n = size(A,2);
+A = [1 0.1 1.6; 0.2 1 -1; -1 1.2 -2; 1 0.2 0.9]
+b = [0; 0; 0; 100]
+
+cvx_begin
+ variables x(n)
+ minimize sum(huber(A*x - b))
+cvx_end
+
+%% 
+cvx_begin
+ variables x(n)
+ minimize norm(A*x - b, 2)
+cvx_end
